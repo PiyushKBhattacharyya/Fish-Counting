@@ -77,8 +77,16 @@ def analyze_dataset_structure(data_dir='Data/tiny_dataset', yolo_dir='yolo_data'
 
         for seq in sequences:
             seq_path = os.path.join(loc_path, seq)
-            images = [f for f in os.listdir(seq_path) if f.endswith(('.jpg', '.png'))]
-            annotations = [f for f in os.listdir(seq_path) if f.endswith('.txt')]
+
+            # Count images and annotations recursively (for nested subfolders)
+            images = []
+            annotations = []
+            for root, dirs, files in os.walk(seq_path):
+                for file in files:
+                    if file.endswith(('.jpg', '.png')):
+                        images.append(os.path.join(root, file))
+                    elif file.endswith('.txt'):
+                        annotations.append(os.path.join(root, file))
 
             seq_images += len(images)
             seq_annotations += len(annotations)
@@ -412,10 +420,156 @@ def create_visualizations(dataset_stats, boxes_df, seq_stats_df, output_dir='EDA
     plt.savefig(os.path.join(output_dir, 'research_insights.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
-    print(f"\nVisualization suite saved to {output_dir}/:")
-    print("├── comprehensive_dataset_analysis.png - Main analysis dashboard")
-    print("├── statistical_dashboard.png - Detailed statistics")
-    print("└── research_insights.png - ML research implications")
+    # Save individual plots separately
+    print(f"\nSaving individual plots to {output_dir}/:")
+
+    # Figure 1: Dataset Distribution
+    plt.figure(figsize=(12, 8))
+    x = np.arange(len(locations))
+    width = 0.35
+    plt.bar(x - width/2, images, width, label='Images', alpha=0.8, color='#2E86AB')
+    plt.bar(x + width/2, annotations, width, label='Annotations', alpha=0.8, color='#A23B72')
+    plt.xlabel('Geographic Location', fontsize=12)
+    plt.ylabel('Count', fontsize=12)
+    plt.title('Dataset Size Distribution by Location', fontsize=14, fontweight='bold')
+    plt.xticks(x, [loc.title() for loc in locations], rotation=45)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'dataset_distribution.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 2: Sequence Length Distribution
+    plt.figure(figsize=(8, 6))
+    plt.hist(seq_lengths, bins=10, alpha=0.7, color='#F18F01', edgecolor='black', linewidth=0.5)
+    plt.xlabel('Average Frames per Sequence', fontsize=12)
+    plt.ylabel('Frequency', fontsize=12)
+    plt.title('Sequence Length Distribution', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'sequence_length_distribution.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 3: Fish Count Distribution
+    plt.figure(figsize=(10, 6))
+    fish_counts = seq_stats_df['avg_fish_per_frame']
+    bins = np.logspace(np.log10(max(0.1, fish_counts.min())), np.log10(fish_counts.max()), 20)
+    plt.hist(fish_counts, bins=bins, alpha=0.7, color='#C73E1D', edgecolor='black', linewidth=0.5)
+    plt.xscale('log')
+    plt.xlabel('Average Fish Count per Frame (log scale)', fontsize=12)
+    plt.ylabel('Number of Sequences', fontsize=12)
+    plt.title('Fish Density Distribution Across Sequences', fontsize=14, fontweight='bold')
+    mean_fish = fish_counts.mean()
+    median_fish = fish_counts.median()
+    plt.axvline(mean_fish, color='blue', linestyle='--', alpha=0.7, label='.1f')
+    plt.axvline(median_fish, color='green', linestyle='--', alpha=0.7, label='.1f')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'fish_count_distribution.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 4: Bounding Box Analysis
+    plt.figure(figsize=(8, 6))
+    bbox_areas = boxes_df['width'] * boxes_df['height']
+    plt.hist(bbox_areas, bins=30, alpha=0.7, color='#6B73A6', edgecolor='black', linewidth=0.5)
+    plt.xlabel('Bounding Box Area (normalized)', fontsize=12)
+    plt.ylabel('Frequency', fontsize=12)
+    plt.title('Object Size Distribution', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'bbox_analysis.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 5: Correlation Analysis
+    plt.figure(figsize=(10, 6))
+    seq_length_fish = pd.merge(dataset_stats, seq_stats_df.groupby('location')['avg_fish_per_frame'].mean().reset_index(),
+                              on='location', how='left')
+    plt.scatter(seq_length_fish['avg_seq_length'], seq_length_fish['avg_fish_per_frame'],
+               s=100, alpha=0.7, color='#3A7D44', edgecolors='black', linewidth=0.5)
+    for i, loc in enumerate(seq_length_fish['location']):
+        plt.annotate(loc.title(), (seq_length_fish['avg_seq_length'][i], seq_length_fish['avg_fish_per_frame'][i]),
+                    xytext=(5, 5), textcoords='offset points', fontsize=9)
+    plt.xlabel('Average Frames per Sequence', fontsize=12)
+    plt.ylabel('Average Fish Count per Frame', fontsize=12)
+    plt.title('Correlation: Sequence Length vs Fish Density', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    corr = seq_length_fish['avg_seq_length'].corr(seq_length_fish['avg_fish_per_frame'])
+    plt.text(0.05, 0.95, '.3f', transform=plt.gca().transAxes,
+            fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'correlation_analysis.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 6: Box Plot by Location
+    plt.figure(figsize=(10, 6))
+    sns.boxplot(data=seq_stats_df, x='location', y='avg_fish_per_frame', palette='Set3')
+    plt.title('Fish Count Distribution by Location', fontweight='bold', fontsize=14)
+    plt.xlabel('Location', fontsize=12)
+    plt.ylabel('Avg Fish per Frame', fontsize=12)
+    plt.xticks(rotation=45)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'fish_count_by_location.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 7: Aspect Ratio Distribution
+    plt.figure(figsize=(8, 6))
+    aspect_ratios = boxes_df['width'] / boxes_df['height']
+    plt.hist(aspect_ratios, bins=30, alpha=0.7, color='#6A5ACD', edgecolor='black', linewidth=0.5)
+    plt.xlabel('Width/Height Ratio', fontsize=12)
+    plt.ylabel('Frequency', fontsize=12)
+    plt.title('Bounding Box Aspect Ratio Distribution', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'aspect_ratio_distribution.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 8: Cumulative Distribution
+    plt.figure(figsize=(8, 6))
+    sorted_counts = np.sort(seq_stats_df['avg_fish_per_frame'])
+    yvals = np.arange(len(sorted_counts))/float(len(sorted_counts)-1)
+    plt.plot(sorted_counts, yvals, color='#32CD32', linewidth=2)
+    plt.fill_between(sorted_counts, yvals, alpha=0.3, color='#32CD32')
+    plt.xlabel('Average Fish Count per Frame', fontsize=12)
+    plt.ylabel('Cumulative Probability', fontsize=12)
+    plt.title('Cumulative Distribution of Fish Counts', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'cumulative_distribution.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Figure 9: Location Difficulty Analysis
+    plt.figure(figsize=(10, 6))
+    loc_performance = seq_stats_df.groupby('location').agg({
+        'avg_fish_per_frame': ['mean', 'std', 'count']
+    }).round(2)
+    loc_performance.columns = ['mean_fish', 'std_fish', 'sample_size']
+    loc_performance = loc_performance.reset_index()
+    loc_performance['difficulty_score'] = loc_performance['mean_fish'] * (1 + loc_performance['std_fish'])
+
+    bars = plt.barh(loc_performance['location'], loc_performance['difficulty_score'],
+                   color=plt.cm.RdYlBu_r(np.linspace(0, 1, len(loc_performance))))
+    plt.xlabel('Difficulty Score (higher = more challenging)', fontsize=12)
+    plt.ylabel('Location', fontsize=12)
+    plt.title('Predicted Model Difficulty by Location', fontsize=14, fontweight='bold')
+    for bar, score in zip(bars, loc_performance['difficulty_score']):
+        plt.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
+               '.2f', ha='left', va='center', fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'location_difficulty.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print("Individual plots saved:")
+    print("├── dataset_distribution.png")
+    print("├── sequence_length_distribution.png")
+    print("├── fish_count_distribution.png")
+    print("├── bbox_analysis.png")
+    print("├── correlation_analysis.png")
+    print("├── fish_count_by_location.png")
+    print("├── aspect_ratio_distribution.png")
+    print("├── cumulative_distribution.png")
+    print("└── location_difficulty.png")
 
 def export_statistics(dataset_stats, boxes_df, seq_stats_df, output_dir='EDA'):
     """
