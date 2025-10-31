@@ -11,7 +11,17 @@ def do_split(in_dir, out_dir, image_dir):
     if (len(file) == 0): return
 
     # Get image size to convert to normalized coordinates
-    (h, w, c) = cv2.imread(image_dir + '/0.jpg', cv2.IMREAD_COLOR).shape
+    # Try to find any image file in the directory
+    image_files = glob.glob(os.path.join(image_dir, "*.jpg"))
+    if not image_files:
+        print(f"No image files found in {image_dir}")
+        return
+    img_path = image_files[0]
+    img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+    if img is None:
+        print(f"Failed to load image: {img_path}")
+        return
+    (h, w, c) = img.shape
 
     # Read MOT file
     f = open(file[0])
@@ -60,9 +70,6 @@ def do_split(in_dir, out_dir, image_dir):
         with open(path, "w") as f2:
             f2.write(label)
     
-
-
-
 def file_split(in_dir, out_dir, image_dir):
     for location in os.listdir(in_dir):
 
@@ -93,7 +100,6 @@ def file_split(in_dir, out_dir, image_dir):
 
             # Generate Yolo files
             do_split(label_seq_dir, out_seq_dir, image_seq_dir)
-
 
 if __name__ == "__main__":
     in_dir = "Data/tiny_dataset/annotations-tiny"
