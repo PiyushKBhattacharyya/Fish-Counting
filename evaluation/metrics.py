@@ -160,27 +160,93 @@ class EvaluationMetrics:
 
     def _extract_boxes_from_predictions(self, predictions: torch.Tensor) -> Optional[List[torch.Tensor]]:
         """Extract bounding boxes from model predictions."""
-        # This is a placeholder - actual implementation depends on prediction format
-        # Assuming predictions shape: (batch_size, num_anchors, H, W, num_classes + 5)
-
         try:
-            batch_size, num_anchors, H, W, num_features = predictions.shape
-
             boxes = []
-            for b in range(batch_size):
-                for a in range(num_anchors):
-                    for h in range(H):
-                        for w in range(W):
-                            pred = predictions[b, a, h, w]
-                            if len(pred) >= 5:  # x, y, w, h, conf
-                                conf = pred[4].item()
-                                if conf > 0.1:  # Confidence threshold
-                                    box = pred[:4]  # x, y, w, h
+
+            # Handle different prediction formats
+            if predictions.dim() == 5:  # Standard YOLO format (B, num_anchors, H, W, features)
+                batch_size, num_anchors, H, W, num_features = predictions.shape
+                for b in range(batch_size):
+                    for a in range(num_anchors):
+                        for h in range(H):
+                            for w in range(W):
+                                pred = predictions[b, a, h, w]
+                                if pred.shape[0] >= 5:
+                                    # Extract: class, x, y, w, h, conf (if available)
+                                    if pred.shape[0] == 6:  # class + bbox + conf
+                                        conf = pred[5].item()
+                                        box = pred[1:5]  # x, y, w, h
+                                    elif pred.shape[0] == 5:  # bbox + conf
+                                        conf = pred[4].item()
+                                        box = pred[:4]  # x, y, w, h
+                                    else:
+                                        continue
+
+                                    if conf > 0.01:  # Confidence threshold
+                                        boxes.append(torch.cat([box, torch.tensor([conf])]))
+
+            elif predictions.dim() == 4:  # Sequence format (B, T, num_anchors, features)
+                batch_size, T, num_anchors, num_features = predictions.shape
+                for b in range(batch_size):
+                    for t in range(T):
+                        for a in range(num_anchors):
+                            pred = predictions[b, t, a]
+                            if pred.shape[0] >= 5:
+                                if pred.shape[0] == 6:
+                                    conf = pred[5].item()
+                                    box = pred[1:5]
+                                elif pred.shape[0] == 5:
+                                    conf = pred[4].item()
+                                    box = pred[:4]
+                                else:
+                                    continue
+
+                                if conf > 0.01:
                                     boxes.append(torch.cat([box, torch.tensor([conf])]))
 
+            elif predictions.dim() == 3:  # Flattened format (B, N, features)
+                batch_size, N, num_features = predictions.shape
+                for b in range(batch_size):
+                    for n in range(N):
+                        pred = predictions[b, n]
+                        if pred.shape[0] >= 5:
+                            if pred.shape[0] == 6:
+                                conf = pred[5].item()
+                                box = pred[1:5]
+                            elif pred.shape[0] == 5:
+                                conf = pred[4].item()
+                                box = pred[:4]
+                            else:
+                                continue
+
+                            if conf > 0.01:
+                                boxes.append(torch.cat([box, torch.tensor([conf])]))
+
+            else:
+                # Last resort: try to interpret as (N, features)
+                if predictions.shape[0] > 0 and predictions.shape[-1] >= 5:
+                    for i in range(predictions.shape[0]):
+                        pred = predictions[i]
+                        if pred.shape[0] >= 5:
+                            if pred.shape[0] == 6:
+                                conf = pred[5].item()
+                                box = pred[1:5]
+                            elif pred.shape[0] == 5:
+                                conf = pred[4].item()
+                                box = pred[:4]
+                            else:
+                                continue
+
+                            if conf > 0.01:
+                                boxes.append(torch.cat([box, torch.tensor([conf])]))
+
+            logger.info(f"Extracted {len(boxes)} boxes from predictions")
             return boxes if boxes else None
+
         except Exception as e:
-            logger.warning(f"Failed to extract boxes from predictions: {e}")
+            logger.warning(f"Failed to extract boxes from predictions: {str(e)}")
+            logger.warning(f"Predictions shape: {predictions.shape}")
+            logger.warning(f"Predictions type: {type(predictions)}")
             return None
 
     def compute_map(self, predictions: List[torch.Tensor], targets: List[torch.Tensor]) -> float:
