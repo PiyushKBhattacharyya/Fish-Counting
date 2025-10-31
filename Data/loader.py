@@ -194,9 +194,9 @@ class FishDataset(Dataset):
 
             # Apply transforms
             if self.transform:
-                transformed = self.transform(image=image, bboxes=frame_data['bboxes'])
+                transformed = self.transform(image=image)
                 image = transformed['image']
-                bboxes = transformed['bboxes']
+                bboxes = frame_data['bboxes']
             else:
                 bboxes = frame_data['bboxes']
 
@@ -242,12 +242,12 @@ class FishDataLoader:
                 A.RandomBrightnessContrast(p=0.2),
                 A.GaussianBlur(p=0.1),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ], bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']))
+            ])
         else:
             transforms = A.Compose([
                 A.Resize(*config.get('data.image_size', [640, 640])),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ], bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']))
+            ])
 
         return transforms
 

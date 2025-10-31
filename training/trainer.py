@@ -113,6 +113,7 @@ class Trainer:
         """Create learning rate scheduler."""
         training_config = config.get('training', {})
         epochs = training_config.get('epochs', 100)
+        lr = training_config.get('learning_rate', 0.001)
 
         scheduler_type = 'cosine'  # Default
 
