@@ -77,6 +77,21 @@ class Trainer:
 
         logger.info("Trainer initialized successfully")
 
+    def _count_detections(self, predictions):
+        """Count total detections in predictions."""
+        try:
+            # Simple count based on non-zero predictions
+            # This is a placeholder - in practice you'd apply NMS and confidence thresholding
+            total_count = 0
+            if predictions.dim() == 5:  # (B, T, num_anchors, H, W, features)
+                # Assume last dimension contains confidence scores
+                conf_scores = predictions[..., 4]  # confidence scores
+                # Count detections above a basic threshold
+                total_count = (conf_scores > 0.1).sum().item()
+            return total_count
+        except:
+            return 0
+
     def _create_optimizer(self) -> optim.Optimizer:
         """Create optimizer with configured parameters."""
         optimizer_config = config.get('training', {})
@@ -179,9 +194,13 @@ class Trainer:
             # Record losses
             epoch_losses.append(loss_dict['total_loss'].item())
 
+            # Count fish in predictions (simple count for logging)
+            with torch.no_grad():
+                pred_count = self._count_detections(outputs)
+
             # Log progress
             if batch_idx % 10 == 0:
-                logger.info(f"Batch {batch_idx}/{len(self.train_loader)}, Loss: {loss_dict['total_loss'].item():.4f}")
+                logger.info(f"Batch {batch_idx}/{len(self.train_loader)}, Loss: {loss_dict['total_loss'].item():.4f}, Detected Fish: {pred_count}")
 
         # Calculate epoch metrics
         epoch_metrics['loss'] = np.mean(epoch_losses)

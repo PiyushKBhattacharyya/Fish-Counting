@@ -276,9 +276,11 @@ def evaluate_model(model, test_loader, args):
     all_predictions = []
     all_targets = []
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     with torch.no_grad():
         for batch in test_loader:
-            images = batch['images'].to(model.device)
+            images = batch['images'].to(device)
             targets = batch['targets']
 
             # Forward pass
