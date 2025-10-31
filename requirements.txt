@@ -1,1 +1,5 @@
 opencv-python
+ultralytics
+seaborn
+scikit-learn
+scipy
