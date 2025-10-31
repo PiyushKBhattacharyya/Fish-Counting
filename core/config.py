@@ -61,7 +61,7 @@ class Config:
                 'patience': 10,
                 'save_freq': 10,
                 'resume': False,
-                'pretrained_weights': None,
+                'pretrained_weights': 'yolov8n.pt',
             },
 
             # Evaluation configuration

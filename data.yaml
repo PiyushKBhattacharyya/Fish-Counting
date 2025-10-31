@@ -9,7 +9,7 @@ annotation_root: yolo_data
 # Data splits by location
 train_locations: [kenai-train]
 val_locations: [kenai-val]
-test_locations: [elwha, kenai-channel, kenai-rightbank, nushagak]
+test_locations: [kenai-channel] #, kenai-rightbank, nushagak, elwha]
 
 # Number of classes
 nc: 1

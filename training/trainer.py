@@ -77,19 +77,129 @@ class Trainer:
 
         logger.info("Trainer initialized successfully")
 
-    def _count_detections(self, predictions):
-        """Count total detections in predictions."""
+    def _count_detections(self, predictions, conf_threshold=0.25, nms_iou_threshold=0.45):
+        """
+        Count total detections after applying confidence thresholding and NMS.
+
+        Args:
+            predictions: Model predictions (B, T, num_anchors, H, W, num_classes + 5)
+            conf_threshold: Confidence threshold for filtering
+            nms_iou_threshold: IoU threshold for NMS
+
+        Returns:
+            Total number of detections after post-processing
+        """
         try:
-            # Simple count based on non-zero predictions
-            # This is a placeholder - in practice you'd apply NMS and confidence thresholding
             total_count = 0
-            if predictions.dim() == 5:  # (B, T, num_anchors, H, W, features)
-                # Assume last dimension contains confidence scores
-                conf_scores = predictions[..., 4]  # confidence scores
-                # Count detections above a basic threshold
-                total_count = (conf_scores > 0.1).sum().item()
+
+            # Handle both single image and sequence inputs
+            if predictions.dim() == 5:  # (B, num_anchors, H, W, features)
+                B, num_anchors, H, W, features = predictions.shape
+                T = 1
+                pred = predictions.unsqueeze(1)  # Add T dimension
+            else:  # (B, T, num_anchors, H, W, features)
+                B, T, num_anchors, H, W, features = predictions.shape
+                pred = predictions
+
+            num_classes = features - 5
+
+            # Process each batch and time step
+            for b in range(B):
+                for t in range(T):
+                    batch_pred = pred[b, t]  # (num_anchors, H, W, features)
+
+                    # Extract predictions
+                    pred_xy = batch_pred[..., 0:2].sigmoid()
+                    pred_wh = batch_pred[..., 2:4]
+                    pred_conf = batch_pred[..., 4].sigmoid()
+                    pred_cls = batch_pred[..., 5:].sigmoid()
+
+                    # Get anchors
+                    anchors = self.model.detection_head.anchors.to(predictions.device)
+
+                    # Convert to absolute coordinates
+                    grid_x, grid_y = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+                    grid_x = grid_x.to(predictions.device)
+                    grid_y = grid_y.to(predictions.device)
+
+                    # Denormalize predictions
+                    pred_x = (pred_xy[..., 0] + grid_x) / W
+                    pred_y = (pred_xy[..., 1] + grid_y) / H
+                    pred_w = torch.exp(pred_wh[..., 0]) * anchors[:, 0].view(num_anchors, 1, 1) / W
+                    pred_h = torch.exp(pred_wh[..., 1]) * anchors[:, 1].view(num_anchors, 1, 1) / H
+
+                    # Flatten predictions
+                    pred_x = pred_x.view(-1)
+                    pred_y = pred_y.view(-1)
+                    pred_w = pred_w.view(-1)
+                    pred_h = pred_h.view(-1)
+                    pred_conf = pred_conf.view(-1)
+                    pred_cls = pred_cls.view(num_anchors * H * W, num_classes)
+
+                    # Convert to corner format for NMS
+                    pred_x1 = pred_x - pred_w / 2
+                    pred_y1 = pred_y - pred_h / 2
+                    pred_x2 = pred_x + pred_w / 2
+                    pred_y2 = pred_y + pred_h / 2
+
+                    # Filter by confidence
+                    conf_mask = pred_conf > conf_threshold
+                    if conf_mask.sum() == 0:
+                        continue
+
+                    pred_x1 = pred_x1[conf_mask]
+                    pred_y1 = pred_y1[conf_mask]
+                    pred_x2 = pred_x2[conf_mask]
+                    pred_y2 = pred_y2[conf_mask]
+                    pred_conf = pred_conf[conf_mask]
+                    pred_cls = pred_cls[conf_mask]
+
+                    # Get class predictions
+                    if num_classes > 0:
+                        class_scores, class_ids = pred_cls.max(dim=1)
+                        pred_conf = pred_conf * class_scores  # Multiply by class confidence
+                    else:
+                        class_ids = torch.zeros_like(pred_conf, dtype=torch.long)
+
+                    # Apply NMS per class
+                    if len(pred_x1) > 0:
+                        boxes = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=1)
+
+                        # Simple greedy NMS implementation
+                        keep = []
+                        scores = pred_conf
+                        order = scores.argsort(descending=True)
+
+                        while order.numel() > 0:
+                            i = order[0]
+                            keep.append(i)
+
+                            if order.numel() == 1:
+                                break
+
+                            # Compute IoU with remaining boxes
+                            xx1 = torch.max(boxes[i, 0], boxes[order[1:], 0])
+                            yy1 = torch.max(boxes[i, 1], boxes[order[1:], 1])
+                            xx2 = torch.min(boxes[i, 2], boxes[order[1:], 2])
+                            yy2 = torch.min(boxes[i, 3], boxes[order[1:], 3])
+
+                            w = torch.clamp(xx2 - xx1, min=0)
+                            h = torch.clamp(yy2 - yy1, min=0)
+                            inter = w * h
+                            area_i = (boxes[i, 2] - boxes[i, 0]) * (boxes[i, 3] - boxes[i, 1])
+                            area_order = (boxes[order[1:], 2] - boxes[order[1:], 0]) * (boxes[order[1:], 3] - boxes[order[1:], 1])
+                            union = area_i + area_order - inter
+                            iou = inter / (union + 1e-16)
+
+                            # Keep boxes with IoU < threshold
+                            mask = iou <= nms_iou_threshold
+                            order = order[1:][mask]
+
+                        total_count += len(keep)
+
             return total_count
-        except:
+        except Exception as e:
+            logger.warning(f"Error in _count_detections: {str(e)}")
             return 0
 
     def _create_optimizer(self) -> optim.Optimizer:
@@ -194,13 +304,20 @@ class Trainer:
             # Record losses
             epoch_losses.append(loss_dict['total_loss'].item())
 
-            # Count fish in predictions (simple count for logging)
+            # Count fish in predictions and ground truth for logging
             with torch.no_grad():
                 pred_count = self._count_detections(outputs)
+                # Count ground truth detections
+                gt_count = sum(len(target_list) for target_list in targets for target in target_list) if targets else 0
 
-            # Log progress
+            # Log progress with detailed metrics
             if batch_idx % 10 == 0:
-                logger.info(f"Batch {batch_idx}/{len(self.train_loader)}, Loss: {loss_dict['total_loss'].item():.4f}, Detected Fish: {pred_count}")
+                logger.info(f"Batch {batch_idx}/{len(self.train_loader)}, "
+                           f"Loss: {loss_dict['total_loss'].item():.4f}, "
+                           f"Box: {loss_dict.get('box_loss', 0):.4f}, "
+                           f"Obj: {loss_dict.get('obj_loss', 0):.4f}, "
+                           f"Cls: {loss_dict.get('cls_loss', 0):.4f}, "
+                           f"Pred Fish: {pred_count}, GT Fish: {gt_count}")
 
         # Calculate epoch metrics
         epoch_metrics['loss'] = np.mean(epoch_losses)

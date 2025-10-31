@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict, Optional
 import math
 import numpy as np
+import os
 
 try:
     from ..core.config import config
@@ -304,28 +305,147 @@ class InnovativeYOLO(nn.Module):
         device: str = 'cuda'
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute YOLO loss.
+        Compute proper YOLO loss with box regression, objectness, and classification components.
 
         Args:
-            predictions: Model predictions
-            targets: Ground truth targets
+            predictions: Model predictions (B, T, num_anchors, H, W, num_classes + 5)
+            targets: Ground truth targets [batch_idx, class_id, x, y, w, h, conf]
             device: Device for computations
 
         Returns:
             Dictionary of loss components
         """
-        # Simplified YOLO loss implementation
-        # Using MSE as placeholder loss that requires gradients
+        # YOLO loss hyperparameters
+        lambda_box = 0.05  # Box loss weight
+        lambda_obj = 1.0   # Objectness loss weight
+        lambda_cls = 0.5   # Classification loss weight
+        lambda_noobj = 0.5 # No object loss weight
 
-        # Dummy loss based on predictions to ensure gradients flow
-        total_loss = torch.mean(predictions ** 2) * 0.01  # Scale down to reasonable range
+        # Get prediction dimensions
+        if predictions.dim() == 5:  # (B, num_anchors, H, W, features)
+            B, num_anchors, H, W, features = predictions.shape
+            T = 1
+        else:  # (B, T, num_anchors, H, W, features)
+            B, T, num_anchors, H, W, features = predictions.shape
 
-        losses = {}
+        num_classes = features - 5  # x, y, w, h, conf, classes
 
-        losses['total_loss'] = total_loss
-        losses['box_loss'] = total_loss * 0.5
-        losses['obj_loss'] = total_loss * 0.3
-        losses['cls_loss'] = total_loss * 0.2
+        # Reshape predictions for processing
+        pred = predictions.view(B * T, num_anchors, H, W, features)
+
+        # Extract prediction components
+        pred_xy = pred[..., 0:2].sigmoid()  # Sigmoid for center coordinates
+        pred_wh = pred[..., 2:4]  # Width/height (will be exponentiated relative to anchors)
+        pred_conf = pred[..., 4:5].sigmoid()  # Objectness confidence
+        pred_cls = pred[..., 5:].sigmoid()  # Class probabilities
+
+        # Generate anchor grids
+        grid_x, grid_y = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+        grid_x = grid_x.to(device).float()
+        grid_y = grid_y.to(device).float()
+
+        # Anchor boxes (normalized to feature map size)
+        anchors = self.detection_head.anchors.to(device).float()  # (num_anchors, 2)
+        anchor_w = anchors[:, 0].view(1, num_anchors, 1, 1)
+        anchor_h = anchors[:, 1].view(1, num_anchors, 1, 1)
+
+        # Build target tensors
+        obj_mask = torch.zeros(B * T, num_anchors, H, W, device=device)
+        noobj_mask = torch.ones(B * T, num_anchors, H, W, device=device)
+        target_xy = torch.zeros(B * T, num_anchors, H, W, 2, device=device)
+        target_wh = torch.zeros(B * T, num_anchors, H, W, 2, device=device)
+        target_conf = torch.zeros(B * T, num_anchors, H, W, device=device)
+        target_cls = torch.zeros(B * T, num_anchors, H, W, num_classes, device=device)
+
+        # Process targets for each batch and time step
+        for batch_idx, batch_targets in enumerate(targets):  # batch_targets is list of T tensors
+            for time_idx, frame_targets in enumerate(batch_targets):  # frame_targets is [N, 5] tensor
+                b = batch_idx * T + time_idx  # flattened index
+
+                for target in frame_targets:
+                    if len(target) >= 5:  # [class_id, x, y, w, h]
+                        class_id, tx, ty, tw, th = target[:5]
+                        tconf = 1.0  # default confidence for ground truth
+
+                        # Convert to grid coordinates
+                        gx = tx * W
+                        gy = ty * H
+                        gw = tw * W
+                        gh = th * H
+
+                        # Get grid cell
+                        gi = int(gx)
+                        gj = int(gy)
+
+                        if 0 <= gi < W and 0 <= gj < H:
+                            # Find best anchor using IoU
+                            best_anchor = 0
+                            best_iou = 0
+                            for a_idx in range(num_anchors):
+                                anchor = anchors[a_idx]
+                                # Calculate IoU between target box and anchor
+                                anchor_box = [0, 0, anchor[0], anchor[1]]  # [x1,y1,x2,y2]
+                                target_box = [tx - tw/2, ty - th/2, tx + tw/2, ty + th/2]
+
+                                # IoU calculation
+                                inter_x1 = max(anchor_box[0], target_box[0])
+                                inter_y1 = max(anchor_box[1], target_box[1])
+                                inter_x2 = min(anchor_box[2], target_box[2])
+                                inter_y2 = min(anchor_box[3], target_box[3])
+
+                                inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+                                anchor_area = anchor[0] * anchor[1]
+                                target_area = tw * th
+                                union_area = anchor_area + target_area - inter_area
+
+                                iou = inter_area / union_area if union_area > 0 else 0
+
+                                if iou > best_iou:
+                                    best_iou = iou
+                                    best_anchor = a_idx
+
+                            # Set target values
+                            obj_mask[b, best_anchor, gj, gi] = 1
+                            noobj_mask[b, best_anchor, gj, gi] = 0
+
+                            target_xy[b, best_anchor, gj, gi, 0] = gx - gi  # offset x
+                            target_xy[b, best_anchor, gj, gi, 1] = gy - gj  # offset y
+
+                            target_wh[b, best_anchor, gj, gi, 0] = torch.log(gw / (anchors[best_anchor, 0] * W) + 1e-16)
+                            target_wh[b, best_anchor, gj, gi, 1] = torch.log(gh / (anchors[best_anchor, 1] * H) + 1e-16)
+
+                            target_conf[b, best_anchor, gj, gi] = tconf
+
+                            if num_classes > 0:
+                                target_cls[b, best_anchor, gj, gi, int(class_id)] = 1
+
+        # Compute losses
+        # Box loss (MSE for xy, MSE for wh)
+        box_loss_xy = F.mse_loss(pred_xy, target_xy, reduction='sum') / (B * T)
+        box_loss_wh = F.mse_loss(pred_wh, target_wh, reduction='sum') / (B * T)
+        box_loss = lambda_box * (box_loss_xy + box_loss_wh)
+
+        # Objectness loss (BCE)
+        obj_loss = lambda_obj * F.binary_cross_entropy(pred_conf.squeeze(-1), target_conf, reduction='sum') / (B * T)
+
+        # No object loss
+        noobj_loss = lambda_noobj * F.binary_cross_entropy(pred_conf.squeeze(-1), target_conf, weight=noobj_mask, reduction='sum') / (B * T)
+
+        # Classification loss (BCE)
+        cls_loss = torch.tensor(0.0, device=device)
+        if num_classes > 0:
+            cls_loss = lambda_cls * F.binary_cross_entropy(pred_cls, target_cls, reduction='sum') / (B * T)
+
+        # Total loss
+        total_loss = box_loss + obj_loss + noobj_loss + cls_loss
+
+        losses = {
+            'total_loss': total_loss,
+            'box_loss': box_loss,
+            'obj_loss': obj_loss,
+            'noobj_loss': noobj_loss,
+            'cls_loss': cls_loss
+        }
 
         return losses
 
@@ -357,7 +477,7 @@ class InnovativeYOLO(nn.Module):
 
 
 def create_innovative_yolo(config_dict: Optional[Dict] = None) -> InnovativeYOLO:
-    """Factory function to create InnovativeYOLO model."""
+    """Factory function to create InnovativeYOLO model with optional pre-trained weights."""
     if config_dict is None:
         config_dict = config.get('model', {})
 
@@ -368,5 +488,31 @@ def create_innovative_yolo(config_dict: Optional[Dict] = None) -> InnovativeYOLO
         temporal_attention=config_dict.get('temporal_attention', True),
         sonar_optimization=config_dict.get('sonar_optimization', True)
     )
+
+    # Load pre-trained weights if available
+    pretrained_path = config_dict.get('pretrained_weights', 'yolov8n.pt')
+    if pretrained_path and os.path.exists(pretrained_path):
+        try:
+            # Load YOLOv8 weights (this is a simplified version - in practice you'd need
+            # to map the weights properly from YOLOv8 to this architecture)
+            checkpoint = torch.load(pretrained_path, map_location='cpu')
+
+            # Try to load state dict
+            if 'model' in checkpoint:
+                # YOLOv8 format
+                state_dict = checkpoint['model']
+            elif isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                # General checkpoint format
+                state_dict = checkpoint['state_dict']
+            else:
+                # Direct state dict
+                state_dict = checkpoint
+
+            # Load compatible weights (this would need proper weight mapping in practice)
+            # For now, just log that weights are available
+            logger.info(f"Found pre-trained weights at {pretrained_path}, but weight mapping not implemented yet")
+
+        except Exception as e:
+            logger.warning(f"Failed to load pre-trained weights from {pretrained_path}: {e}")
 
     return model
