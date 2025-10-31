@@ -83,14 +83,20 @@ def analyze_dataset_structure(data_dir='Data/tiny_dataset', yolo_dir='yolo_data'
             annotations = []
             for root, dirs, files in os.walk(seq_path):
                 for file in files:
-                    if file.endswith(('.jpg', '.png')):
-                        images.append(os.path.join(root, file))
-                    elif file.endswith('.txt'):
+                    if file.endswith('.txt'):
                         annotations.append(os.path.join(root, file))
 
-            seq_images += len(images)
             seq_annotations += len(annotations)
-            sequence_lengths.append(len(images))
+
+        # Count images from corresponding raw data location
+        raw_loc_path = os.path.join(data_dir, 'raw', location)
+        if os.path.exists(raw_loc_path):
+            for root, dirs, files in os.walk(raw_loc_path):
+                for file in files:
+                    if file.endswith(('.jpg', '.png')):
+                        seq_images += 1
+
+        sequence_lengths.append(seq_images)
 
         print(f"├── Images: {seq_images}")
         print(f"└── Annotations: {seq_annotations}")

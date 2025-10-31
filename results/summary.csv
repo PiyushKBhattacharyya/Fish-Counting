@@ -1,0 +1,2 @@
+total_frames,total_fish_count,avg_fish_per_frame,max_fish_in_frame,min_fish_in_frame,std_fish_count,avg_inference_time,fps
+50,0,0.0,0,0,0.0,0.13327717304229736,7.5031603475160455

@@ -3,3 +3,9 @@ ultralytics
 seaborn
 scikit-learn
 scipy
+matplotlib
+pandas
+numpy
+torch
+torchvision
+torchaudio
