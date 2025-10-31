@@ -1,0 +1,23 @@
+# YOLO data configuration for Fish Counting
+# Images from Data/tiny_dataset/raw subfolders
+# Annotations from yolo_data subfolders
+
+# Dataset roots
+image_root: Data/tiny_dataset/raw
+annotation_root: yolo_data
+
+# Data splits by location
+train_locations: [kenai-train]
+val_locations: [kenai-val]
+test_locations: [elwha, kenai-channel, kenai-rightbank, nushagak]
+
+# Number of classes
+nc: 1
+
+# Class names
+names: ['fish']
+
+# Download command (not applicable for local dataset)
+download: |
+  # Local dataset - no download needed
+  echo "Using local fish counting dataset"

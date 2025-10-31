@@ -9,3 +9,8 @@ numpy
 torch
 torchvision
 torchaudio
+albumentations
+pyyaml
+tqdm
+wandb
+tensorboard
