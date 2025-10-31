@@ -319,6 +319,14 @@ class Trainer:
                            f"Cls: {loss_dict.get('cls_loss', 0):.4f}, "
                            f"Pred Fish: {pred_count}, GT Fish: {gt_count}")
 
+            # Log progress with detailed metrics
+            if batch_idx % 10 == 0:
+                logger.info(f"Batch {batch_idx}/{len(self.train_loader)}, "
+                           f"Loss: {loss_dict['total_loss'].item():.4f}, "
+                           f"Box: {loss_dict.get('box_loss', 0):.4f}, "
+                           f"Obj: {loss_dict.get('obj_loss', 0):.4f}, "
+                           f"Cls: {loss_dict.get('cls_loss', 0):.4f}")
+
         # Calculate epoch metrics
         epoch_metrics['loss'] = np.mean(epoch_losses)
         epoch_metrics.update({k: v for k, v in loss_dict.items() if k != 'total_loss'})
@@ -338,7 +346,7 @@ class Trainer:
         all_targets = []
 
         with torch.no_grad():
-            for batch in self.val_loader:
+            for batch_idx, batch in enumerate(self.val_loader):
                 images = batch['images'].to(self.device)
                 targets = batch['targets']
 

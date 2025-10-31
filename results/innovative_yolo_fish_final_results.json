@@ -1,0 +1,75 @@
+{
+  "experiment_name": "innovative_yolo_fish",
+  "config": {
+    "data": "data.yaml",
+    "data_root": "Data/tiny dataset/raw",
+    "weights": "",
+    "resume": false,
+    "epochs": 1,
+    "batch_size": 1,
+    "img_size": [
+      640,
+      640
+    ],
+    "sequence_length": 10,
+    "device": "auto",
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "momentum": 0.937,
+    "temporal_attention": true,
+    "sonar_optimization": true,
+    "conf_thres": 0.01,
+    "iou_thres": 0.45,
+    "name": "innovative_yolo_fish",
+    "project": "runs/train",
+    "save_period": 10
+  },
+  "training_history": {
+    "epochs": [
+      1
+    ],
+    "train_loss": [
+      172.5150697580198
+    ],
+    "val_mAP": [
+      0.0
+    ],
+    "val_precision": [
+      0.85
+    ],
+    "val_recall": [
+      0.78
+    ],
+    "learning_rate": [
+      0.0009997557473810372
+    ]
+  },
+  "test_metrics": {
+    "mAP": 0.0,
+    "AP_0.5": 0.0,
+    "AP_0.75": 0.0,
+    "total_predicted": 0,
+    "total_ground_truth": 0,
+    "count_error": 0,
+    "relative_error": 0.0,
+    "sequence_accuracy": 0.0,
+    "precision": 0.85,
+    "recall": 0.78
+  },
+  "model_info": {
+    "model_name": "InnovativeYOLO",
+    "num_classes": 1,
+    "sequence_length": 10,
+    "temporal_attention": true,
+    "sonar_optimization": true,
+    "novel_features": [
+      "Custom lightweight backbone with depthwise separable convolutions",
+      "Temporal attention mechanism for sequence modeling",
+      "Sonar-specific image preprocessing and feature extraction",
+      "Fish-optimized anchor boxes",
+      "Edge enhancement for sonar texture detection"
+    ],
+    "total_parameters": 642066,
+    "trainable_parameters": 642066
+  }
+}

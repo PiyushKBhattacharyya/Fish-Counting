@@ -16,9 +16,10 @@ except ImportError:
 class EvaluationMetrics:
     """Comprehensive evaluation metrics for fish counting and detection."""
 
-    def __init__(self, iou_thresholds: Optional[List[float]] = None, conf_thresholds: Optional[List[float]] = None):
+    def __init__(self, iou_thresholds: Optional[List[float]] = None, conf_thresholds: Optional[List[float]] = None, debug_mode: bool = False):
         self.iou_thresholds = iou_thresholds or config.get('evaluation.iou_thresholds', [0.5, 0.75])
         self.conf_thresholds = conf_thresholds or [0.1, 0.3, 0.5, 0.7, 0.9]
+        self.debug_mode = debug_mode or config.get('evaluation.debug_mode', False)
 
         # Store results for analysis
         self.results_history = []
@@ -163,8 +164,35 @@ class EvaluationMetrics:
         try:
             boxes = []
 
+            # Check if predictions are all zeros or very small
+            if predictions.numel() == 0:
+                logger.warning("Predictions tensor is empty!")
+                return None
+
             # Handle different prediction formats
-            if predictions.dim() == 5:  # Standard YOLO format (B, num_anchors, H, W, features)
+            if predictions.dim() == 6:  # Sequence YOLO format (B, T, num_anchors, H, W, features)
+                batch_size, T, num_anchors, H, W, num_features = predictions.shape
+                for b in range(batch_size):
+                    for t in range(T):
+                        for a in range(num_anchors):
+                            for h in range(H):
+                                for w in range(W):
+                                    pred = predictions[b, t, a, h, w]
+                                    if pred.shape[0] >= 5:
+                                        # Extract: class, x, y, w, h, conf (if available)
+                                        if pred.shape[0] == 6:  # class + bbox + conf
+                                            conf = torch.sigmoid(pred[5]).item()
+                                            box = pred[1:5]  # x, y, w, h
+                                        elif pred.shape[0] == 5:  # bbox + conf
+                                            conf = torch.sigmoid(pred[4]).item()
+                                            box = pred[:4]  # x, y, w, h
+                                        else:
+                                            continue
+
+                                        if conf > 0.25:  # Confidence threshold
+                                            boxes.append(torch.cat([box, torch.tensor([conf])]))
+
+            elif predictions.dim() == 5:  # Standard YOLO format (B, num_anchors, H, W, features)
                 batch_size, num_anchors, H, W, num_features = predictions.shape
                 for b in range(batch_size):
                     for a in range(num_anchors):
@@ -174,15 +202,15 @@ class EvaluationMetrics:
                                 if pred.shape[0] >= 5:
                                     # Extract: class, x, y, w, h, conf (if available)
                                     if pred.shape[0] == 6:  # class + bbox + conf
-                                        conf = pred[5].item()
+                                        conf = torch.sigmoid(pred[5]).item()
                                         box = pred[1:5]  # x, y, w, h
                                     elif pred.shape[0] == 5:  # bbox + conf
-                                        conf = pred[4].item()
+                                        conf = torch.sigmoid(pred[4]).item()
                                         box = pred[:4]  # x, y, w, h
                                     else:
                                         continue
 
-                                    if conf > 0.01:  # Confidence threshold
+                                    if conf > 0.25:  # Confidence threshold
                                         boxes.append(torch.cat([box, torch.tensor([conf])]))
 
             elif predictions.dim() == 4:  # Sequence format (B, T, num_anchors, features)
@@ -193,15 +221,15 @@ class EvaluationMetrics:
                             pred = predictions[b, t, a]
                             if pred.shape[0] >= 5:
                                 if pred.shape[0] == 6:
-                                    conf = pred[5].item()
+                                    conf = torch.sigmoid(pred[5]).item()
                                     box = pred[1:5]
                                 elif pred.shape[0] == 5:
-                                    conf = pred[4].item()
+                                    conf = torch.sigmoid(pred[4]).item()
                                     box = pred[:4]
                                 else:
                                     continue
 
-                                if conf > 0.01:
+                                if conf > 0.25:
                                     boxes.append(torch.cat([box, torch.tensor([conf])]))
 
             elif predictions.dim() == 3:  # Flattened format (B, N, features)
@@ -211,15 +239,15 @@ class EvaluationMetrics:
                         pred = predictions[b, n]
                         if pred.shape[0] >= 5:
                             if pred.shape[0] == 6:
-                                conf = pred[5].item()
+                                conf = torch.sigmoid(pred[5]).item()
                                 box = pred[1:5]
                             elif pred.shape[0] == 5:
-                                conf = pred[4].item()
+                                conf = torch.sigmoid(pred[4]).item()
                                 box = pred[:4]
                             else:
                                 continue
 
-                            if conf > 0.01:
+                            if conf > 0.25:
                                 boxes.append(torch.cat([box, torch.tensor([conf])]))
 
             else:
@@ -229,18 +257,22 @@ class EvaluationMetrics:
                         pred = predictions[i]
                         if pred.shape[0] >= 5:
                             if pred.shape[0] == 6:
-                                conf = pred[5].item()
+                                conf = torch.sigmoid(pred[5]).item()
                                 box = pred[1:5]
                             elif pred.shape[0] == 5:
-                                conf = pred[4].item()
+                                conf = torch.sigmoid(pred[4]).item()
                                 box = pred[:4]
                             else:
                                 continue
 
-                            if conf > 0.01:
+                            if conf > 0.25:
                                 boxes.append(torch.cat([box, torch.tensor([conf])]))
 
-            logger.info(f"Extracted {len(boxes)} boxes from predictions")
+            if len(boxes) == 0:
+                logger.warning("No boxes extracted - possible issues:")
+                logger.warning("  - All confidences below 0.25 threshold")
+                logger.warning("  - Incorrect prediction format/shape")
+                logger.warning("  - Model not outputting valid detections")
             return boxes if boxes else None
 
         except Exception as e:
@@ -265,7 +297,7 @@ class EvaluationMetrics:
             ap = self.compute_ap(predictions, targets, iou_thresh)
             ap_scores.append(ap)
 
-        return np.mean(ap_scores)
+        return float(np.mean(ap_scores))
 
     def compute_counting_accuracy(
         self,
@@ -310,12 +342,15 @@ class EvaluationMetrics:
                 sequence_accuracies.append(accuracy)
 
         metrics = {
-            'total_predicted': total_pred_count,
-            'total_ground_truth': total_target_count,
-            'count_error': abs(total_pred_count - total_target_count),
-            'relative_error': abs(total_pred_count - total_target_count) / max(total_target_count, 1),
-            'sequence_accuracy': np.mean(sequence_accuracies) if sequence_accuracies else 0.0
+            'total_predicted': int(total_pred_count),
+            'total_ground_truth': int(total_target_count),
+            'count_error': int(abs(total_pred_count - total_target_count)),
+            'relative_error': float(abs(total_pred_count - total_target_count) / max(total_target_count, 1)),
+            'sequence_accuracy': float(np.mean(sequence_accuracies) if sequence_accuracies else 0.0)
         }
+
+        # Ensure numpy types are converted to Python types
+        metrics = {k: float(v) if isinstance(v, np.floating) else int(v) if isinstance(v, np.integer) else v for k, v in metrics.items()}
 
         return metrics
 
@@ -339,18 +374,21 @@ class EvaluationMetrics:
         metrics = {}
 
         # Detection metrics
-        metrics['mAP'] = self.compute_map(predictions, targets)
+        metrics['mAP'] = float(self.compute_map(predictions, targets))
 
         for iou_thresh in self.iou_thresholds:
-            metrics[f'AP_{iou_thresh}'] = self.compute_ap(predictions, targets, iou_thresh)
+            metrics[f'AP_{iou_thresh}'] = float(self.compute_ap(predictions, targets, iou_thresh))
 
         # Counting metrics
         counting_metrics = self.compute_counting_accuracy(predictions, targets, conf_threshold=conf_threshold)
         metrics.update(counting_metrics)
 
         # Additional metrics
-        metrics['precision'] = self._compute_precision(predictions, targets, conf_threshold)
-        metrics['recall'] = self._compute_recall(predictions, targets, conf_threshold)
+        metrics['precision'] = float(self._compute_precision(predictions, targets, conf_threshold))
+        metrics['recall'] = float(self._compute_recall(predictions, targets, conf_threshold))
+
+        # Ensure all values are Python native types
+        metrics = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v for k, v in metrics.items()}
 
         # Store results
         self.results_history.append(metrics)
@@ -379,10 +417,27 @@ class EvaluationMetrics:
 
     def save_results(self, filepath: str):
         """Save evaluation results to file."""
+        def convert_numpy_types(obj):
+            if isinstance(obj, dict):
+                return {k: convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy_types(item) for item in obj]
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            else:
+                return obj
+
         results = {
             'metrics': self.results_history,
             'summary': self.get_summary_stats()
         }
+
+
+        results = convert_numpy_types(results)
 
         with open(filepath, 'w') as f:
             json.dump(results, f, indent=2)
@@ -400,10 +455,10 @@ class EvaluationMetrics:
 
         for key in metrics_keys:
             values = [result.get(key, 0.0) for result in self.results_history]
-            summary[f'avg_{key}'] = np.mean(values)
-            summary[f'std_{key}'] = np.std(values)
-            summary[f'max_{key}'] = np.max(values)
-            summary[f'min_{key}'] = np.min(values)
+            summary[f'avg_{key}'] = float(np.mean(values))
+            summary[f'std_{key}'] = float(np.std(values))
+            summary[f'max_{key}'] = float(np.max(values))
+            summary[f'min_{key}'] = float(np.min(values))
 
         return summary
 

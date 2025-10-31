@@ -144,6 +144,7 @@ class FishDataset(Dataset):
     def _create_sequences(self) -> List[Dict]:
         """Create sequences from individual frame annotations."""
         sequences = []
+        skipped_sequences = 0
 
         for location, loc_annotations in self.annotations.items():
             # Group by sequence
@@ -163,13 +164,18 @@ class FishDataset(Dataset):
                     sequence_frames = seq_frames[i:i + self.sequence_length]
 
                     # Check if all frames exist
-                    if all(os.path.exists(frame['image_path']) for frame in sequence_frames):
+                    missing_frames = [frame for frame in sequence_frames if not os.path.exists(frame['image_path'])]
+                    if missing_frames:
+                        skipped_sequences += 1
+                    else:
                         sequences.append({
                             'frames': sequence_frames,
                             'sequence_id': f"{location}_{seq_id}_{i}",
                             'location': location
                         })
 
+        if skipped_sequences > 0:
+            logger.info(f"Created {len(sequences)} sequences, skipped {skipped_sequences} due to missing images")
         return sequences
 
     def __len__(self) -> int:
@@ -187,8 +193,7 @@ class FishDataset(Dataset):
             # Load image
             image = cv2.imread(frame_data['image_path'])
             if image is None:
-                # Create dummy image if file doesn't exist
-                image = np.zeros((640, 640, 3), dtype=np.uint8)
+                raise RuntimeError(f"Failed to load image: {frame_data['image_path']}. Image is missing or corrupted.")
 
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 

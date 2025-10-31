@@ -186,8 +186,21 @@ class YOLODetectionHead(nn.Module):
             nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
             nn.BatchNorm2d(in_channels // 2),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels // 2, (num_classes + 5) * num_anchors, 1)  # 5 = x,y,w,h,conf
+            nn.Conv2d(in_channels // 2, (num_classes + 5) * num_anchors, 1, bias=True)  # 5 = x,y,w,h,conf
         )
+
+        # Initialize bias for confidence scores
+        # Set positive bias (0.1) for the last conv layer to boost initial confidence values
+        with torch.no_grad():
+            # The bias is for each anchor's features: [x, y, w, h, conf, classes...]
+            # We want to boost the confidence (index 4) for each anchor
+            bias = self.conv[-1].bias
+            num_outputs = (num_classes + 5) * num_anchors
+            for i in range(num_anchors):
+                # Confidence bias index: 4 + i * (num_classes + 5)
+                conf_idx = 4 + i * (num_classes + 5)
+                if conf_idx < num_outputs:
+                    bias[conf_idx] = 0.1
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -317,7 +330,7 @@ class InnovativeYOLO(nn.Module):
         """
         # YOLO loss hyperparameters
         lambda_box = 0.05  # Box loss weight
-        lambda_obj = 1.0   # Objectness loss weight
+        lambda_obj = 2.0   # Objectness loss weight
         lambda_cls = 0.5   # Classification loss weight
         lambda_noobj = 0.5 # No object loss weight
 

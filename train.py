@@ -279,7 +279,7 @@ def evaluate_model(model, test_loader, args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     with torch.no_grad():
-        for batch in test_loader:
+        for batch_idx, batch in enumerate(test_loader):
             images = batch['images'].to(device)
             targets = batch['targets']
 
