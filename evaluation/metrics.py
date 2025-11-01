@@ -312,6 +312,8 @@ class EvaluationMetrics:
         iou_threshold: float = 0.5,
         conf_threshold: float = 0.25
     ) -> Dict[str, float]:
+        """Compute counting accuracy metrics."""
+        logger.info(f"Computing counting accuracy with conf_threshold={conf_threshold}")
         """
         Compute counting accuracy metrics.
 
@@ -348,6 +350,10 @@ class EvaluationMetrics:
             total_pred_count += pred_count
             total_target_count += target_count
 
+            # Debug: Log first few sequences
+            if len(sequence_accuracies) < 5:
+                logger.info(f"Sequence {len(sequence_accuracies)}: Pred={pred_count}, GT={target_count}")
+
             # Sequence-level accuracy (exact match)
             if target_count > 0:
                 accuracy = 1.0 if abs(pred_count - target_count) <= 1 else 0.0  # Allow ±1 error
@@ -360,6 +366,8 @@ class EvaluationMetrics:
             'relative_error': float(abs(total_pred_count - total_target_count) / max(total_target_count, 1)),
             'sequence_accuracy': float(np.mean(sequence_accuracies) if sequence_accuracies else 0.0)
         }
+
+        logger.info(f"Counting metrics summary: {metrics}")
 
         # Ensure numpy types are converted to Python types
         metrics = {k: float(v) if isinstance(v, np.floating) else int(v) if isinstance(v, np.integer) else v for k, v in metrics.items()}

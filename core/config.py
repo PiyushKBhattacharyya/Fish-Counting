@@ -42,7 +42,9 @@ class Config:
             # Model configuration
             'model': {
                 'name': 'innovative_yolo',
-                'backbone': 'custom_lightweight',
+                'backbone': 'yolo_lightweight',
+                'base_channels': 64,  # Increased base channels for more capacity
+                'dropout_rate': 0.2,  # Dropout for regularization
                 'num_classes': 1,  # fish
                 'input_channels': 3,
                 'temporal_attention': True,
@@ -53,12 +55,19 @@ class Config:
 
             # Training configuration
             'training': {
-                'epochs': 100,
+                'epochs': 300,
                 'learning_rate': 0.001,
-                'weight_decay': 0.0001,
+                'weight_decay': 0.0005,  # Increased weight decay for better regularization
                 'momentum': 0.937,
                 'warmup_epochs': 3,
-                'patience': 10,
+                'patience': 50,  # Extended patience for longer training
+                'early_stopping': {
+                    'enabled': True,
+                    'monitor_metrics': ['mAP', 'precision', 'recall', 'count_error'],
+                    'min_delta': 0.001,
+                    'mode': 'min',  # Minimize for count_error, but we need multi-metric
+                    'patience': 50
+                },
                 'save_freq': 10,
                 'resume': False,
                 'pretrained_weights': 'yolov8n.pt',

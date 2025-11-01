@@ -58,7 +58,11 @@ class FishDataset(Dataset):
         # Create sequences
         self.sequences = self._create_sequences()
 
-        logger.info(f"Loaded {len(self.sequences)} sequences for {split} split")
+        # Log data separation info
+        sequence_locations = [seq['location'] for seq in self.sequences]
+        unique_locations = set(sequence_locations)
+        logger.info(f"Loaded {len(self.sequences)} sequences for {split} split from {len(unique_locations)} locations: {sorted(unique_locations)}")
+        logger.info(f"Location distribution: {[(loc, sequence_locations.count(loc)) for loc in sorted(unique_locations)]}")
 
     def _load_annotations(self) -> Dict[str, List[Dict]]:
         """Load annotations from YOLO format files."""
@@ -247,7 +251,12 @@ class FishDataLoader:
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5),
                 A.RandomBrightnessContrast(p=0.2),
+                A.GaussNoise(p=0.05),  # Add noise for sonar robustness
+                A.ElasticTransform(p=0.1),  # Elastic deformation for shape variation
+                A.GridDistortion(p=0.1),  # Grid distortion for spatial robustness
+                A.OpticalDistortion(p=0.1),  # Optical distortion for camera effects
                 A.GaussianBlur(p=0.1),
+                A.HueSaturationValue(p=0.1),  # Add color augmentation for sonar robustness
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ])
         else:
@@ -271,7 +280,8 @@ class FishDataLoader:
     ) -> DataLoader:
         """Create a data loader for the specified split."""
 
-        batch_size = batch_size or config.get('data.batch_size', 16)
+        # Adjust batch size based on increased model capacity
+        batch_size = batch_size or max(8, config.get('data.batch_size', 16) // 2)  # Reduce batch size for larger model
         num_workers = num_workers or config.get('data.num_workers', 4)
         sequence_length = sequence_length or config.get('data.sequence_length', 10)
 

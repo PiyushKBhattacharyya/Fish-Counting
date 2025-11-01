@@ -84,9 +84,9 @@ class TemporalAttention(nn.Module):
 
 
 class SonarFeatureExtractor(nn.Module):
-    """Lightweight feature extractor optimized for sonar images."""
+    """Lightweight feature extractor optimized for sonar images with increased capacity and dropout."""
 
-    def __init__(self, in_channels: int = 3, base_channels: int = 32):
+    def __init__(self, in_channels: int = 3, base_channels: int = 64, dropout_rate: float = 0.2):
         super().__init__()
 
         # Initial convolution with larger kernel for sonar texture
@@ -94,22 +94,24 @@ class SonarFeatureExtractor(nn.Module):
             nn.Conv2d(in_channels, base_channels, 7, stride=2, padding=3),
             nn.BatchNorm2d(base_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout_rate),
             nn.MaxPool2d(3, stride=2, padding=1)
         )
 
-        # Lightweight blocks with depthwise separable convolutions
-        self.layer1 = self._make_layer(base_channels, base_channels * 2, 2)
-        self.layer2 = self._make_layer(base_channels * 2, base_channels * 4, 2)
-        self.layer3 = self._make_layer(base_channels * 4, base_channels * 8, 2)
+        # Lightweight blocks with depthwise separable convolutions and increased channels
+        self.layer1 = self._make_layer(base_channels, base_channels * 2, 2, dropout_rate)
+        self.layer2 = self._make_layer(base_channels * 2, base_channels * 4, 2, dropout_rate)
+        self.layer3 = self._make_layer(base_channels * 4, base_channels * 8, 2, dropout_rate)
 
-        # Sonar-specific enhancement
+        # Sonar-specific enhancement with dropout
         self.edge_enhancer = nn.Sequential(
             nn.Conv2d(base_channels * 8, base_channels * 8, 3, padding=1, groups=base_channels * 8),
             nn.BatchNorm2d(base_channels * 8),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout_rate)
         )
 
-    def _make_layer(self, in_channels: int, out_channels: int, num_blocks: int) -> nn.Sequential:
+    def _make_layer(self, in_channels: int, out_channels: int, num_blocks: int, dropout_rate: float) -> nn.Sequential:
         """Create a lightweight convolutional layer."""
         layers = []
 
@@ -118,9 +120,11 @@ class SonarFeatureExtractor(nn.Module):
             nn.Conv2d(in_channels, out_channels, 3, stride=2, padding=1, groups=in_channels),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout_rate),
             nn.Conv2d(out_channels, out_channels, 1),  # Pointwise
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout_rate)
         ])
 
         # Additional blocks
@@ -129,9 +133,11 @@ class SonarFeatureExtractor(nn.Module):
                 nn.Conv2d(out_channels, out_channels, 3, padding=1, groups=out_channels),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True),
+                nn.Dropout2d(dropout_rate),
                 nn.Conv2d(out_channels, out_channels, 1),
                 nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(dropout_rate)
             ])
 
         return nn.Sequential(*layers)
@@ -168,17 +174,19 @@ class SonarFeatureExtractor(nn.Module):
 class YOLODetectionHead(nn.Module):
     """YOLO-style detection head with custom anchors for fish."""
 
-    def __init__(self, in_channels: int, num_classes: int = 1, num_anchors: int = 3):
+    def __init__(self, in_channels: int, num_classes: int = 1, num_anchors: int = 5):
         super().__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
 
         # Fish-specific anchor boxes (normalized)
-        # Based on typical fish aspect ratios in sonar images
+        # Based on typical fish aspect ratios in sonar images - optimized for 5 sizes
         self.anchors = torch.tensor([
-            [0.1, 0.1],  # Small fish
-            [0.2, 0.15], # Medium fish
-            [0.3, 0.2]   # Large fish
+            [0.08, 0.08],  # Extra small fish
+            [0.12, 0.10],  # Small fish
+            [0.18, 0.15],  # Medium-small fish
+            [0.25, 0.20],  # Medium fish
+            [0.35, 0.25]   # Large fish
         ])
 
         # Detection head
@@ -249,7 +257,11 @@ class InnovativeYOLO(nn.Module):
         self.sonar_optimization = sonar_optimization
 
         # Feature extractor
-        self.backbone = SonarFeatureExtractor(input_channels)
+        self.backbone = SonarFeatureExtractor(
+            input_channels,
+            base_channels=config.get('model.base_channels', 64),
+            dropout_rate=config.get('model.dropout_rate', 0.2)
+        )
 
         # Temporal attention (applied before detection)
         if temporal_attention:
@@ -318,7 +330,7 @@ class InnovativeYOLO(nn.Module):
         device: str = 'cuda'
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute proper YOLO loss with box regression, objectness, and classification components.
+        Compute improved YOLO loss with proper balancing, target processing, and focal loss for hard examples.
 
         Args:
             predictions: Model predictions (B, T, num_anchors, H, W, num_classes + 5)
@@ -328,11 +340,15 @@ class InnovativeYOLO(nn.Module):
         Returns:
             Dictionary of loss components
         """
-        # YOLO loss hyperparameters
-        lambda_box = 0.05  # Box loss weight
-        lambda_obj = 2.0   # Objectness loss weight
+        # Enhanced YOLO loss hyperparameters with better balancing
+        lambda_box = 2.0   # Increased box loss weight for better localization
+        lambda_obj = 1.0   # Balanced objectness loss weight
         lambda_cls = 0.5   # Classification loss weight
-        lambda_noobj = 0.5 # No object loss weight
+        lambda_noobj = 0.1  # Reduced no object loss to avoid overpowering
+
+        # Focal loss parameters for hard example mining
+        alpha = 0.25  # Focal loss alpha
+        gamma = 2.0   # Focal loss gamma
 
         # Get prediction dimensions
         if predictions.dim() == 5:  # (B, num_anchors, H, W, features)
@@ -362,7 +378,7 @@ class InnovativeYOLO(nn.Module):
         anchor_w = anchors[:, 0].view(1, num_anchors, 1, 1)
         anchor_h = anchors[:, 1].view(1, num_anchors, 1, 1)
 
-        # Build target tensors
+        # Build target tensors with improved processing
         obj_mask = torch.zeros(B * T, num_anchors, H, W, device=device)
         noobj_mask = torch.ones(B * T, num_anchors, H, W, device=device)
         target_xy = torch.zeros(B * T, num_anchors, H, W, 2, device=device)
@@ -370,7 +386,7 @@ class InnovativeYOLO(nn.Module):
         target_conf = torch.zeros(B * T, num_anchors, H, W, device=device)
         target_cls = torch.zeros(B * T, num_anchors, H, W, num_classes, device=device)
 
-        # Process targets for each batch and time step
+        # Improved target processing with better anchor assignment
         for batch_idx, batch_targets in enumerate(targets):  # batch_targets is list of T tensors
             for time_idx, frame_targets in enumerate(batch_targets):  # frame_targets is [N, 5] tensor
                 b = batch_idx * T + time_idx  # flattened index
@@ -391,11 +407,12 @@ class InnovativeYOLO(nn.Module):
                         gj = int(gy)
 
                         if 0 <= gi < W and 0 <= gj < H:
-                            # Find best anchor using IoU
+                            # Improved anchor assignment based on IoU and aspect ratio similarity
                             best_anchor = 0
-                            best_iou = 0
+                            best_score = 0
                             for a_idx in range(num_anchors):
                                 anchor = anchors[a_idx]
+
                                 # Calculate IoU between target box and anchor
                                 anchor_box = [0, 0, anchor[0], anchor[1]]  # [x1,y1,x2,y2]
                                 target_box = [tx - tw/2, ty - th/2, tx + tw/2, ty + th/2]
@@ -413,8 +430,16 @@ class InnovativeYOLO(nn.Module):
 
                                 iou = inter_area / union_area if union_area > 0 else 0
 
-                                if iou > best_iou:
-                                    best_iou = iou
+                                # Also consider aspect ratio similarity
+                                anchor_aspect = anchor[1] / (anchor[0] + 1e-16)
+                                target_aspect = th / (tw + 1e-16)
+                                aspect_similarity = 1.0 / (1.0 + abs(anchor_aspect - target_aspect))
+
+                                # Combined score
+                                score = iou * aspect_similarity
+
+                                if score > best_score:
+                                    best_score = score
                                     best_anchor = a_idx
 
                             # Set target values
@@ -432,22 +457,30 @@ class InnovativeYOLO(nn.Module):
                             if num_classes > 0:
                                 target_cls[b, best_anchor, gj, gi, int(class_id)] = 1
 
-        # Compute losses
-        # Box loss (MSE for xy, MSE for wh)
-        box_loss_xy = F.mse_loss(pred_xy, target_xy, reduction='sum') / (B * T)
-        box_loss_wh = F.mse_loss(pred_wh, target_wh, reduction='sum') / (B * T)
+        # Compute enhanced losses with focal loss
+        # Box loss (MSE for xy, MSE for wh) - only for positive samples
+        obj_mask_expanded = obj_mask.unsqueeze(-1)  # For broadcasting
+        box_loss_xy = F.mse_loss(pred_xy * obj_mask_expanded, target_xy * obj_mask_expanded, reduction='sum') / (obj_mask.sum() + 1e-16)
+        box_loss_wh = F.mse_loss(pred_wh * obj_mask_expanded, target_wh * obj_mask_expanded, reduction='sum') / (obj_mask.sum() + 1e-16)
         box_loss = lambda_box * (box_loss_xy + box_loss_wh)
 
-        # Objectness loss (BCE)
-        obj_loss = lambda_obj * F.binary_cross_entropy(pred_conf.squeeze(-1), target_conf, reduction='sum') / (B * T)
+        # Objectness loss with focal loss
+        obj_pred = pred_conf.squeeze(-1)
+        focal_obj_weight = torch.where(target_conf == 1,
+                                     alpha * (1 - obj_pred) ** gamma,
+                                     (1 - alpha) * obj_pred ** gamma)
+        obj_loss = lambda_obj * (focal_obj_weight * F.binary_cross_entropy(obj_pred, target_conf, reduction='none')).sum() / (B * T)
 
-        # No object loss
-        noobj_loss = lambda_noobj * F.binary_cross_entropy(pred_conf.squeeze(-1), target_conf, weight=noobj_mask, reduction='sum') / (B * T)
+        # No object loss with reduced weight
+        noobj_loss = lambda_noobj * F.binary_cross_entropy(obj_pred, target_conf, weight=noobj_mask, reduction='sum') / (B * T)
 
-        # Classification loss (BCE)
+        # Classification loss (BCE with focal loss)
         cls_loss = torch.tensor(0.0, device=device)
         if num_classes > 0:
-            cls_loss = lambda_cls * F.binary_cross_entropy(pred_cls, target_cls, reduction='sum') / (B * T)
+            focal_cls_weight = torch.where(target_cls == 1,
+                                         alpha * (1 - pred_cls) ** gamma,
+                                         (1 - alpha) * pred_cls ** gamma)
+            cls_loss = lambda_cls * (focal_cls_weight * F.binary_cross_entropy(pred_cls, target_cls, reduction='none')).sum() / (obj_mask.sum() + 1e-16)
 
         # Total loss
         total_loss = box_loss + obj_loss + noobj_loss + cls_loss

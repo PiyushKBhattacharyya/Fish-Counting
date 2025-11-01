@@ -317,15 +317,30 @@ class Trainer:
                                     gt_count += len(frame_targets)
                         elif isinstance(target_sequence, torch.Tensor) and target_sequence.numel() > 0:
                             gt_count += len(target_sequence)
+    
+                # Log first batch of each epoch for debugging
+                if batch_idx == 0 and self.current_epoch == 0:  # Only log first epoch, first batch
+                    logger.info(f"Training batch sample - Pred: {pred_count}, GT: {gt_count}")
 
             # Log progress with detailed metrics
             if batch_idx % 10 == 0:
                 logger.info(f"Batch {batch_idx}/{len(self.train_loader)}, "
-                           f"Loss: {loss_dict['total_loss'].item():.4f}, "
-                           f"Box: {loss_dict.get('box_loss', 0):.4f}, "
-                           f"Obj: {loss_dict.get('obj_loss', 0):.4f}, "
-                           f"Cls: {loss_dict.get('cls_loss', 0):.4f}, "
-                           f"Pred Fish: {pred_count}, GT Fish: {gt_count}")
+                            f"Loss: {loss_dict['total_loss'].item():.4f}, "
+                            f"Box: {loss_dict.get('box_loss', 0):.4f}, "
+                            f"Obj: {loss_dict.get('obj_loss', 0):.4f}, "
+                            f"Cls: {loss_dict.get('cls_loss', 0):.4f}, "
+                            f"Pred Fish: {pred_count}, GT Fish: {gt_count}")
+
+                # Log gradient norms for debugging
+                total_grad_norm = 0.0
+                param_count = 0
+                for name, param in self.model.named_parameters():
+                    if param.requires_grad and param.grad is not None:
+                        grad_norm = param.grad.data.norm(2).item()
+                        total_grad_norm += grad_norm ** 2
+                        param_count += 1
+                total_grad_norm = total_grad_norm ** 0.5 if param_count > 0 else 0.0
+                logger.info(f"Batch {batch_idx} gradient norm: {total_grad_norm:.2e} (across {param_count} params)")
 
         # Calculate epoch metrics
         epoch_metrics['loss'] = np.mean(epoch_losses)
@@ -344,11 +359,17 @@ class Trainer:
 
         all_predictions = []
         all_targets = []
+        total_sequences = 0
+        total_frames = 0
+        sequence_ids = []
+        locations = []
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(self.val_loader):
                 images = batch['images'].to(self.device)
                 targets = batch['targets']
+                batch_sequence_ids = batch.get('sequence_ids', [])
+                batch_locations = batch.get('locations', [])
 
                 # Forward pass
                 outputs = self.model(images)
@@ -356,10 +377,30 @@ class Trainer:
                 # Store for evaluation
                 all_predictions.append(outputs.cpu())
                 all_targets.extend(targets)
+                sequence_ids.extend(batch_sequence_ids)
+                locations.extend(batch_locations)
+
+                total_sequences += len(batch_sequence_ids)
+                # Count frames in targets
+                for target_seq in targets:
+                    if isinstance(target_seq, list):
+                        total_frames += sum(len(frame_targets) for frame_targets in target_seq if isinstance(frame_targets, torch.Tensor))
+                    elif isinstance(target_seq, torch.Tensor):
+                        total_frames += len(target_seq)
+
+        # Log validation data info
+        logger.info(f"Validation Data Summary: {total_sequences} sequences, {len(sequence_ids)} unique sequence IDs, {len(set(locations))} unique locations")
+        if sequence_ids:
+            logger.info(f"Sample validation sequence IDs: {sequence_ids[:5]}")
+        if locations:
+            logger.info(f"Validation locations: {list(set(locations))}")
 
         # Compute evaluation metrics
         if all_predictions and all_targets:
             val_metrics = self.evaluator.compute_metrics(all_predictions, all_targets)
+
+            # Log key metrics for debugging
+            logger.info(f"Validation Metrics: Total Predicted: {val_metrics.get('total_predicted', 0)}, Total GT: {val_metrics.get('total_ground_truth', 0)}, Count Error: {val_metrics.get('count_error', 0)}")
 
         return val_metrics
 
@@ -370,11 +411,26 @@ class Trainer:
 
         logger.info(f"Starting training for {num_epochs} epochs")
 
-        warmup_epochs = config.get('training.warmup_epochs', 3)
-        patience = config.get('training.patience', 10)
-        best_metric_key = 'mAP'  # Primary metric to monitor
+        # Log initial parameter values for debugging
+        initial_params = {}
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                initial_params[name] = param.data.clone()
+        logger.info(f"Initial model parameters logged - total trainable params: {len(initial_params)}")
 
-        patience_counter = 0
+        warmup_epochs = config.get('training.warmup_epochs', 3)
+        early_stopping_config = config.get('training.early_stopping', {})
+        patience = early_stopping_config.get('patience', 50)
+
+        # Multi-metric monitoring for advanced early stopping
+        monitor_metrics = early_stopping_config.get('monitor_metrics', ['mAP', 'precision', 'recall', 'count_error'])
+        min_delta = early_stopping_config.get('min_delta', 0.001)
+        mode = early_stopping_config.get('mode', 'min')  # 'min' for count_error, but we use multi-metric
+
+        # Track best metrics for each monitored metric
+        best_metrics = {metric: float('inf') if mode == 'min' else 0.0 for metric in monitor_metrics}
+        patience_counters = {metric: 0 for metric in monitor_metrics}
+
         start_time = time.time()
 
         for epoch in range(num_epochs):
@@ -399,6 +455,26 @@ class Trainer:
             logger.log_epoch_summary(epoch + 1, train_metrics, val_metrics)
             logger.info(f"Epoch {epoch + 1} completed in {epoch_time:.2f}s")
 
+            # Log parameter updates for debugging (every 5 epochs)
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                params_changed = 0
+                total_params = 0
+                max_change = 0.0
+                for name, param in self.model.named_parameters():
+                    if param.requires_grad:
+                        total_params += 1
+                        if name in initial_params:
+                            change = torch.norm(param.data - initial_params[name]).item()
+                            max_change = max(max_change, change)
+                            if change > 1e-7:  # Small threshold for floating point precision
+                                params_changed += 1
+                logger.info(f"Epoch {epoch + 1} - Parameters: {params_changed}/{total_params} changed, max change: {max_change:.2e}")
+
+                # Update initial_params for next comparison
+                for name, param in self.model.named_parameters():
+                    if param.requires_grad:
+                        initial_params[name] = param.data.clone()
+
             # Save training history
             epoch_history = {
                 'epoch': epoch + 1,
@@ -412,23 +488,106 @@ class Trainer:
             # Save checkpoint
             self.save_checkpoint(epoch_history)
 
-            # Early stopping
-            current_metric = val_metrics.get(best_metric_key, 0.0)
-            if current_metric > self.best_metric:
-                self.best_metric = current_metric
-                patience_counter = 0
-                # Save best model
-                self.save_checkpoint(epoch_history, is_best=True)
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    logger.info(f"Early stopping after {epoch + 1} epochs")
-                    break
+            # Advanced multi-metric early stopping
+            should_stop = False
+            improved_any = False
+
+            for metric in monitor_metrics:
+                current_value = val_metrics.get(metric, 0.0)
+
+                # Check if metric improved
+                if mode == 'min':
+                    improved = current_value < (best_metrics[metric] - min_delta)
+                else:
+                    improved = current_value > (best_metrics[metric] + min_delta)
+
+                if improved:
+                    best_metrics[metric] = current_value
+                    patience_counters[metric] = 0
+                    improved_any = True
+                    logger.info(f"New best {metric}: {current_value:.4f}")
+
+                    # Save best model for this metric
+                    if metric == 'mAP':  # Primary metric gets the "best" designation
+                        self.save_checkpoint(epoch_history, is_best=True)
+                else:
+                    patience_counters[metric] += 1
+
+                    # Check if this metric has exceeded patience
+                    if patience_counters[metric] >= patience:
+                        logger.info(f"Early stopping triggered by {metric} (no improvement for {patience} epochs)")
+                        should_stop = True
+                        break
+
+            # Stop if any metric triggered early stopping
+            if should_stop:
+                break
+
+            # Log patience status for all metrics
+            if epoch % 10 == 0:  # Log every 10 epochs
+                patience_status = ", ".join([f"{m}: {c}/{patience}" for m, c in patience_counters.items()])
+                logger.info(f"Patience counters: {patience_status}")
 
         total_time = time.time() - start_time
         logger.info(f"Training completed in {total_time:.2f}s")
 
         return self.get_training_history()
+
+    def save_checkpoint(self, epoch_history: Dict, is_best: bool = False):
+        """Save model checkpoint."""
+    def _save_best_model_formats(self, epoch_history: Dict):
+        """Save best model in multiple formats (H5 and TFLite)."""
+        try:
+            import tensorflow as tf
+            from tensorflow import keras
+            import onnx
+            import onnxruntime as ort
+        except ImportError:
+            logger.warning("TensorFlow/ONNX not available for model conversion")
+            return
+
+        base_path = self.checkpoint_dir / 'best_model'
+
+        try:
+            # Save in H5 format (TensorFlow/Keras)
+            self.model.eval()
+            dummy_input = torch.randn(1, 3, 640, 640).to(self.device)
+
+            # Convert PyTorch model to ONNX first
+            onnx_path = str(base_path) + '.onnx'
+            torch.onnx.export(
+                self.model,
+                dummy_input,
+                onnx_path,
+                opset_version=11,
+                input_names=['input'],
+                output_names=['output'],
+                dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+            )
+
+            # Load ONNX model and convert to TensorFlow
+            onnx_model = onnx.load(onnx_path)
+            tf_rep = onnx.backend.prepare(onnx_model)
+            tf_model = tf_rep.tf_module
+
+            # Save as H5
+            h5_path = str(base_path) + '.h5'
+            tf_model.save(h5_path)
+            logger.info(f"Best model saved in H5 format: {h5_path}")
+
+            # Convert to TFLite
+            converter = tf.lite.TFLiteConverter.from_saved_model(str(base_path) + '_saved_model')
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            tflite_model = converter.convert()
+
+            # Save TFLite model
+            tflite_path = str(base_path) + '.tflite'
+            with open(tflite_path, 'wb') as f:
+                f.write(tflite_model)
+            logger.info(f"Best model saved in TFLite format: {tflite_path}")
+
+        except Exception as e:
+            logger.warning(f"Failed to save model in alternative formats: {e}")
 
     def save_checkpoint(self, epoch_history: Dict, is_best: bool = False):
         """Save model checkpoint."""
@@ -444,6 +603,27 @@ class Trainer:
 
         if is_best:
             checkpoint_path = self.checkpoint_dir / 'best_model.pth'
+            # Save best model in multiple formats
+            self._save_best_model_formats(epoch_history)
+        else:
+            checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{epoch_history["epoch"]:03d}.pth'
+
+        torch.save(checkpoint, checkpoint_path)
+        logger.info(f"Checkpoint saved: {checkpoint_path}")
+        checkpoint = {
+            'epoch': epoch_history['epoch'],
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'scaler': self.scaler.state_dict() if self.scaler else None,
+            'history': epoch_history,
+            'best_metric': self.best_metric
+        }
+
+        if is_best:
+            checkpoint_path = self.checkpoint_dir / 'best_model.pth'
+            # Save best model in multiple formats
+            self._save_best_model_formats(epoch_history)
         else:
             checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{epoch_history["epoch"]:03d}.pth'
 
