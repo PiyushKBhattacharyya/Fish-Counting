@@ -67,13 +67,13 @@ class EvaluationMetrics:
 
         return iou
 
-    def compute_ap(self, predictions: List[torch.Tensor], targets: List[torch.Tensor], iou_threshold: float = 0.5) -> float:
+    def compute_ap(self, predictions: List[torch.Tensor], targets: List[List[torch.Tensor]], iou_threshold: float = 0.5) -> float:
         """
         Compute Average Precision at given IoU threshold.
 
         Args:
             predictions: List of prediction tensors
-            targets: List of target tensors
+            targets: List of lists of target tensors (nested structure from data loader)
             iou_threshold: IoU threshold for matching
 
         Returns:
@@ -84,7 +84,7 @@ class EvaluationMetrics:
         all_target_boxes = []
 
         # Collect all predictions and targets
-        for pred, target in zip(predictions, targets):
+        for pred, target_sequence in zip(predictions, targets):
             if isinstance(pred, torch.Tensor) and pred.numel() > 0:
                 # Extract boxes and scores from predictions
                 # Assuming pred shape: (batch_size, num_anchors, H, W, num_classes + 5)
@@ -94,8 +94,14 @@ class EvaluationMetrics:
                     # Extract confidence scores
                     all_pred_scores.extend([box[4] for box in pred_boxes])  # Assuming conf is at index 4
 
-            if isinstance(target, torch.Tensor) and target.numel() > 0:
-                all_target_boxes.extend(target)
+            # Handle nested target structure: target_sequence is a list of tensors (one per frame)
+            if isinstance(target_sequence, list):
+                for frame_targets in target_sequence:
+                    if isinstance(frame_targets, torch.Tensor) and frame_targets.numel() > 0:
+                        # Convert YOLO format to [class, x, y, w, h] for stacking
+                        for box_idx in range(frame_targets.shape[0]):
+                            box = frame_targets[box_idx]  # [class, x, y, w, h]
+                            all_target_boxes.append(box)
 
         if not all_pred_boxes or not all_target_boxes:
             return 0.0
@@ -281,13 +287,13 @@ class EvaluationMetrics:
             logger.warning(f"Predictions type: {type(predictions)}")
             return None
 
-    def compute_map(self, predictions: List[torch.Tensor], targets: List[torch.Tensor]) -> float:
+    def compute_map(self, predictions: List[torch.Tensor], targets: List[List[torch.Tensor]]) -> float:
         """
         Compute mean Average Precision across IoU thresholds.
 
         Args:
             predictions: Model predictions
-            targets: Ground truth targets
+            targets: Ground truth targets (nested structure from data loader)
 
         Returns:
             mAP score
@@ -302,7 +308,7 @@ class EvaluationMetrics:
     def compute_counting_accuracy(
         self,
         predictions: List[torch.Tensor],
-        targets: List[torch.Tensor],
+        targets: List[List[torch.Tensor]],
         iou_threshold: float = 0.5,
         conf_threshold: float = 0.25
     ) -> Dict[str, float]:
@@ -311,7 +317,7 @@ class EvaluationMetrics:
 
         Args:
             predictions: Model predictions
-            targets: Ground truth targets
+            targets: Ground truth targets (nested structure from data loader)
             iou_threshold: IoU threshold for matching
             conf_threshold: Confidence threshold for predictions
 
@@ -322,7 +328,7 @@ class EvaluationMetrics:
         total_target_count = 0
         sequence_accuracies = []
 
-        for pred, target in zip(predictions, targets):
+        for pred, target_sequence in zip(predictions, targets):
             # Count predictions above confidence threshold
             pred_boxes = self._extract_boxes_from_predictions(pred)
             if pred_boxes:
@@ -330,8 +336,14 @@ class EvaluationMetrics:
             else:
                 pred_count = 0
 
-            # Count ground truth
-            target_count = len(target) if isinstance(target, torch.Tensor) and target.numel() > 0 else 0
+            # Count ground truth - handle nested structure
+            target_count = 0
+            if isinstance(target_sequence, list):
+                for frame_targets in target_sequence:
+                    if isinstance(frame_targets, torch.Tensor) and frame_targets.numel() > 0:
+                        target_count += len(frame_targets)
+            elif isinstance(target_sequence, torch.Tensor) and target_sequence.numel() > 0:
+                target_count = len(target_sequence)
 
             total_pred_count += pred_count
             total_target_count += target_count
@@ -357,7 +369,7 @@ class EvaluationMetrics:
     def compute_metrics(
         self,
         predictions: List[torch.Tensor],
-        targets: List[torch.Tensor],
+        targets: List[List[torch.Tensor]],
         conf_threshold: float = 0.25
     ) -> Dict[str, float]:
         """
@@ -365,7 +377,7 @@ class EvaluationMetrics:
 
         Args:
             predictions: Model predictions
-            targets: Ground truth targets
+            targets: Ground truth targets (nested structure from data loader)
             conf_threshold: Confidence threshold
 
         Returns:
@@ -398,7 +410,7 @@ class EvaluationMetrics:
     def _compute_precision(
         self,
         predictions: List[torch.Tensor],
-        targets: List[torch.Tensor],
+        targets: List[List[torch.Tensor]],
         conf_threshold: float
     ) -> float:
         """Compute precision at given confidence threshold."""
@@ -408,7 +420,7 @@ class EvaluationMetrics:
     def _compute_recall(
         self,
         predictions: List[torch.Tensor],
-        targets: List[torch.Tensor],
+        targets: List[List[torch.Tensor]],
         conf_threshold: float
     ) -> float:
         """Compute recall at given confidence threshold."""

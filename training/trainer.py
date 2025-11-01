@@ -307,8 +307,16 @@ class Trainer:
             # Count fish in predictions and ground truth for logging
             with torch.no_grad():
                 pred_count = self._count_detections(outputs)
-                # Count ground truth detections
-                gt_count = sum(len(target_list) for target_list in targets for target in target_list) if targets else 0
+                # Count ground truth detections - handle nested structure
+                gt_count = 0
+                if targets:
+                    for target_sequence in targets:
+                        if isinstance(target_sequence, list):
+                            for frame_targets in target_sequence:
+                                if isinstance(frame_targets, torch.Tensor) and frame_targets.numel() > 0:
+                                    gt_count += len(frame_targets)
+                        elif isinstance(target_sequence, torch.Tensor) and target_sequence.numel() > 0:
+                            gt_count += len(target_sequence)
 
             # Log progress with detailed metrics
             if batch_idx % 10 == 0:
@@ -318,14 +326,6 @@ class Trainer:
                            f"Obj: {loss_dict.get('obj_loss', 0):.4f}, "
                            f"Cls: {loss_dict.get('cls_loss', 0):.4f}, "
                            f"Pred Fish: {pred_count}, GT Fish: {gt_count}")
-
-            # Log progress with detailed metrics
-            if batch_idx % 10 == 0:
-                logger.info(f"Batch {batch_idx}/{len(self.train_loader)}, "
-                           f"Loss: {loss_dict['total_loss'].item():.4f}, "
-                           f"Box: {loss_dict.get('box_loss', 0):.4f}, "
-                           f"Obj: {loss_dict.get('obj_loss', 0):.4f}, "
-                           f"Cls: {loss_dict.get('cls_loss', 0):.4f}")
 
         # Calculate epoch metrics
         epoch_metrics['loss'] = np.mean(epoch_losses)
@@ -476,6 +476,8 @@ class Trainer:
             'val_mAP': [],
             'val_precision': [],
             'val_recall': [],
+            'val_count_error': [],
+            'val_sequence_accuracy': [],
             'learning_rate': []
         }
 
@@ -485,9 +487,94 @@ class Trainer:
             history['val_mAP'].append(epoch_data['val'].get('mAP', 0.0))
             history['val_precision'].append(epoch_data['val'].get('precision', 0.0))
             history['val_recall'].append(epoch_data['val'].get('recall', 0.0))
+            history['val_count_error'].append(epoch_data['val'].get('count_error', 0.0))
+            history['val_sequence_accuracy'].append(epoch_data['val'].get('sequence_accuracy', 0.0))
             history['learning_rate'].append(epoch_data['lr'])
 
         return history
+
+    def plot_training_curves(self, save_path: str = 'training_curves.png'):
+        """Plot training curves using matplotlib."""
+        try:
+            import matplotlib.pyplot as plt
+
+            history = self.get_training_history()
+
+            if not history['epochs']:
+                logger.warning("No training history available for plotting")
+                return
+
+            epochs = history['epochs']
+
+            # Create individual plots instead of subplots
+            base_path = save_path.rsplit('.', 1)[0]  # Remove extension
+
+            # Plot 1: Training Loss
+            plt.figure(figsize=(10, 6))
+            plt.plot(epochs, history['train_loss'], 'b-', linewidth=2)
+            plt.title('Training Loss', fontsize=16)
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.grid(True, alpha=0.3)
+            plt.savefig(f"{base_path}_loss.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            logger.info(f"Training loss plot saved to {base_path}_loss.png")
+
+            # Plot 2: Validation Detection Metrics
+            plt.figure(figsize=(10, 6))
+            plt.plot(epochs, history['val_mAP'], 'r-', label='mAP', linewidth=2)
+            plt.plot(epochs, history['val_precision'], 'g--', label='Precision', linewidth=2)
+            plt.plot(epochs, history['val_recall'], 'm:', label='Recall', linewidth=2)
+            plt.title('Validation Detection Metrics', fontsize=16)
+            plt.xlabel('Epoch')
+            plt.ylabel('Score')
+            plt.ylim(0, 1)
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            plt.savefig(f"{base_path}_detection_metrics.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            logger.info(f"Detection metrics plot saved to {base_path}_detection_metrics.png")
+
+            # Plot 3: Count Metrics
+            plt.figure(figsize=(10, 6))
+            plt.plot(epochs, history['val_count_error'], 'orange', linewidth=2, label='Count Error')
+            plt.title('Validation Count Error', fontsize=16)
+            plt.xlabel('Epoch')
+            plt.ylabel('Absolute Error')
+            plt.grid(True, alpha=0.3)
+            plt.savefig(f"{base_path}_count_error.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            logger.info(f"Count error plot saved to {base_path}_count_error.png")
+
+            # Plot 4: Sequence Accuracy and Learning Rate
+            fig, ax1 = plt.subplots(figsize=(10, 6))
+            ax1.plot(epochs, history['val_sequence_accuracy'], 'purple', linewidth=2, label='Sequence Accuracy')
+            ax1.set_title('Sequence Accuracy & Learning Rate', fontsize=16)
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Accuracy', color='purple')
+            ax1.set_ylim(0, 1)
+            ax1.grid(True, alpha=0.3)
+            ax1.tick_params(axis='y', labelcolor='purple')
+
+            # Add learning rate on secondary y-axis
+            ax2 = ax1.twinx()
+            ax2.plot(epochs, history['learning_rate'], 'gray', linestyle='--', linewidth=1, label='Learning Rate')
+            ax2.set_ylabel('Learning Rate', color='gray')
+            ax2.tick_params(axis='y', labelcolor='gray')
+
+            # Combine legends
+            lines1, labels1 = ax1.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax1.legend(lines1 + lines2, labels1 + labels2, loc='center right')
+
+            plt.savefig(f"{base_path}_sequence_accuracy_lr.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            logger.info(f"Sequence accuracy and LR plot saved to {base_path}_sequence_accuracy_lr.png")
+
+        except ImportError:
+            logger.warning("matplotlib not available for plotting")
+        except Exception as e:
+            logger.error(f"Error plotting training curves: {str(e)}")
 
 
 def create_trainer(

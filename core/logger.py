@@ -86,8 +86,12 @@ class Logger:
     def log_metrics(self, metrics: dict, step: Optional[int] = None):
         """Log training/validation metrics."""
         step_str = f"Step {step}: " if step is not None else ""
-        metrics_str = ", ".join(f"{k}: {v:.4f}" for k, v in metrics.items())
-        self._logger.info(f"{step_str}Metrics - {metrics_str}")
+        # Filter out mAP and AP metrics to reduce log verbosity
+        filtered_metrics = {k: v for k, v in metrics.items()
+                           if not (k.startswith('mAP') or k.startswith('AP_'))}
+        if filtered_metrics:
+            metrics_str = ", ".join(f"{k}: {v:.4f}" for k, v in filtered_metrics.items())
+            self._logger.info(f"{step_str}Metrics - {metrics_str}")
 
     def log_epoch_summary(self, epoch: int, train_metrics: dict, val_metrics: Optional[dict] = None):
         """Log epoch summary with training and validation metrics."""

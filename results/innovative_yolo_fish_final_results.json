@@ -18,7 +18,7 @@
     "momentum": 0.937,
     "temporal_attention": true,
     "sonar_optimization": true,
-    "conf_thres": 0.01,
+    "conf_thres": 0.25,
     "iou_thres": 0.45,
     "name": "innovative_yolo_fish",
     "project": "runs/train",
@@ -29,7 +29,7 @@
       1
     ],
     "train_loss": [
-      172.5150697580198
+      242.52313071925465
     ],
     "val_mAP": [
       0.0
@@ -40,6 +40,12 @@
     "val_recall": [
       0.78
     ],
+    "val_count_error": [
+      1260
+    ],
+    "val_sequence_accuracy": [
+      0.0
+    ],
     "learning_rate": [
       0.0009997557473810372
     ]
@@ -48,10 +54,10 @@
     "mAP": 0.0,
     "AP_0.5": 0.0,
     "AP_0.75": 0.0,
-    "total_predicted": 0,
+    "total_predicted": 5220,
     "total_ground_truth": 0,
-    "count_error": 0,
-    "relative_error": 0.0,
+    "count_error": 5220,
+    "relative_error": 5220.0,
     "sequence_accuracy": 0.0,
     "precision": 0.85,
     "recall": 0.78

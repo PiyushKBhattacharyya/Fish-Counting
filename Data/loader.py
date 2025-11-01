@@ -28,7 +28,8 @@ class FishDataset(Dataset):
         locations: Optional[List[str]] = None,
         transform: Optional[A.Compose] = None,
         sequence_length: int = 10,
-        stride: int = 1
+        stride: int = 1,
+        fish_class_id: int = 0  # Make class ID configurable
     ):
         """
         Initialize the fish dataset.
@@ -49,6 +50,7 @@ class FishDataset(Dataset):
         self.transform = transform
         self.sequence_length = sequence_length
         self.stride = stride
+        self.fish_class_id = fish_class_id
 
         # Load data annotations
         self.annotations = self._load_annotations()
@@ -109,7 +111,7 @@ class FishDataset(Dataset):
                     parts = line.strip().split()
                     if len(parts) >= 5:
                         class_id = int(parts[0])
-                        if class_id == 0:  # Assuming class 0 is fish in YOLO format
+                        if class_id == self.fish_class_id:  # Use configurable class ID
                             x_center = float(parts[1])
                             y_center = float(parts[2])
                             width = float(parts[3])
@@ -264,7 +266,8 @@ class FishDataLoader:
         locations: Optional[List[str]] = None,
         batch_size: Optional[int] = None,
         num_workers: Optional[int] = None,
-        sequence_length: Optional[int] = None
+        sequence_length: Optional[int] = None,
+        fish_class_id: int = 0
     ) -> DataLoader:
         """Create a data loader for the specified split."""
 
@@ -280,8 +283,17 @@ class FishDataLoader:
             split=split,
             locations=locations,
             transform=transforms,
-            sequence_length=sequence_length
+            sequence_length=sequence_length,
+            fish_class_id=fish_class_id
         )
+
+        # Validate that annotations were loaded
+        if len(dataset) == 0:
+            logger.warning(f"No sequences loaded for {split} split! Check annotation paths and class ID {fish_class_id}")
+            logger.warning(f"Annotation root: {annotation_root}")
+            logger.warning(f"Locations: {locations}")
+        else:
+            logger.info(f"Loaded {len(dataset)} sequences for {split} split")
 
         dataloader = DataLoader(
             dataset,

@@ -1,19 +1,3 @@
-#!/usr/bin/env python3
-"""
-Main training script for the Innovative YOLO model on Fish Counting dataset.
-
-This script integrates all submodules:
-- Data loading with MOT format annotations
-- Innovative YOLO model with temporal attention and sonar optimization
-- Training pipeline with custom trainer
-- Evaluation metrics for detection and counting accuracy
-
-Note: Designed to run in 'fish_counting_env' virtual environment
-
-Usage:
-    python train_innovative_yolo.py --data data.yaml --epochs 100 --batch-size 16
-"""
-#!/usr/bin/env python3
 """
 Main training script for the Innovative YOLO model on Fish Counting dataset.
 
@@ -24,7 +8,7 @@ This script integrates all submodules:
 - Evaluation metrics for detection and counting accuracy
 
 Usage:
-    python train_innovative_yolo.py --data data.yaml --epochs 100 --batch-size 16
+    python train.py --data data.yaml --epochs 100 --batch-size 16
 """
 
 import argparse
@@ -141,8 +125,8 @@ def create_data_loaders(args, data_config):
     logger.info("Creating data loaders with specified splits")
 
     # Get paths from data config
-    image_root = data_config.get('image_root', 'Data/tiny dataset/raw')
-    annotation_root = data_config.get('annotation_root', 'yolo data')
+    image_root = data_config.get('image_root', 'Data/tiny_dataset/raw')
+    annotation_root = data_config.get('annotation_root', 'yolo_data')
 
     # Define location splits
     train_locations = data_config.get('train_locations', ['kenai-train'])
@@ -263,7 +247,7 @@ def train_model(model, train_loader, val_loader, args):
 
     logger.info("Training completed!")
 
-    return training_history
+    return training_history, trainer
 
 
 def evaluate_model(model, test_loader, args):
@@ -319,7 +303,11 @@ def main():
     model = create_model(args)
 
     # Train model
-    training_history = train_model(model, train_loader, val_loader, args)
+    training_history, trainer = train_model(model, train_loader, val_loader, args)
+
+    # Generate training curves
+    logger.info("Generating training curves...")
+    trainer.plot_training_curves('EDA/training_curves.png')
 
     # Evaluate model
     test_metrics = evaluate_model(model, test_loader, args)
